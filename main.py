@@ -1,22 +1,41 @@
 import socket
 import ssl
+import sys
+from io import StringIO
 import argparse
 from datetime import datetime
 from cryptography import x509
 from cryptography.x509 import ocsp
 from cryptography.hazmat.backends import default_backend
-from cryptography.hazmat.primitives import hashes, serialization
 import requests
 
 domain = argparse.ArgumentParser(description='SSL Scout')
 domain.add_argument('-d','--domain', dest='Domain',
                     action='store', required=True, help='Domain name is required ( e.g. google.com )' )
-domain.add_argument('-o','--output', dest='Choose if to save results within a file')
+domain.add_argument('-o','--output', help='Save results to file')
 args = domain.parse_args()
 
 port = 443
 
+
+def show_banner():
+    print(r"""
+         
+    ███████╗███████╗██╗         ███████╗ ██████╗ ██████╗ ██╗   ██╗████████╗
+    ██╔════╝██╔════╝██║         ██╔════╝██╔════╝██╔═══██╗██║   ██║╚══██╔══╝
+    ███████╗███████╗██║         ███████╗██║     ██║   ██║██║   ██║   ██║   
+    ╚════██║╚════██║██║         ╚════██║██║     ██║   ██║██║   ██║   ██║   
+    ███████║███████║███████╗    ███████║╚██████╗╚██████╔╝╚██████╔╝   ██║   
+    ╚══════╝╚══════╝╚══════╝    ╚══════╝ ╚═════╝ ╚═════╝  ╚═════╝    ╚═╝   
+
+    SSL/TLS Certificate Analyzer v1.0
+    """)
+
+
 def main():
+    show_banner()
+
+
     port = 443
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
@@ -26,6 +45,12 @@ def main():
     secure.connect((args.Domain, port))
 
     certificate = secure.getpeercert()
+
+    output_capture = StringIO()
+    original_stdout = sys.stdout
+    sys.stdout = output_capture
+
+
     print(f"certificate obtained for: {args.Domain}")
 
     def expiry():
@@ -49,7 +74,7 @@ def main():
                 cert_number = datetime(int(year), int(month_update), int(day))
                 date_number = datetime.today()
                 gap = (cert_number - date_number).days
-                print(f"{gap} days till expiry: {ssl_date}")
+                return {"days": gap, "expiry_date": ssl_date}
 
             else:
                 print("Certificate is expired")
@@ -88,7 +113,6 @@ def main():
         if certificate:
             ocsp_urls = certificate.get('OCSP', [])
 
-            print("\n=== OCSP REVOCATION PROTECTION ===")
             if ocsp_urls:
                 print("REVOCATION CHECKING: ENABLED")
                 print(f"Servers: {len(ocsp_urls)} OCSP endpoint(s)")
@@ -111,8 +135,50 @@ def main():
                 print("REVOCATION CHECKING: DISABLED")
                 print("Certificate cannot be revoked if compromised!")
 
-    ocsp_check()
+    def sub_domain():
+        if certificate:
+            san_list = certificate.get('subjectAltName', [])
 
+            if san_list:
+                print("\nIP Addresses for Certificate Domains:")
+
+                for domain_type, domain_name in san_list:
+                    if domain_type == 'DNS' and "*" not in domain_name:
+                        try:
+                            ip_address = socket.gethostbyname(domain_name)
+                            print(f"{domain_name}: {ip_address}")
+                        except:
+                            print(f"{domain_name}: Could not resolve IP")
+            else:
+                print("No domain information in certificate")
+
+    print("\n=======================================")
+    issuer()
+    print("\n=======================================")
+    expiry()
+    print("\n=======================================")
+    encryption()
+    print("\n=======================================")
+    ocsp_check()
+    print("\n=======================================")
+    sub_domain()
+
+
+    all_output = output_capture.getvalue()
+    sys.stdout = original_stdout
+
+
+    print(all_output)
+
+    if args.output:
+        try:
+            with open(args.output, 'w') as f:
+                f.write(all_output)
+            print(f"\nResults saved to: {args.output}")
+        except Exception as e:
+            print(f"Error saving file: {e}")
+
+    secure.close()
 
 if __name__ == '__main__':
     main()
